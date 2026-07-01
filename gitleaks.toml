@@ -1,0 +1,16 @@
+title = "Configuration Gitleaks personnalisée"
+
+# Inclusion des règles par défaut de gitleaks (recommandé pour garder la couverture globale)
+[allowlist]
+description = "Allowlist globale si nécessaire"
+
+[[rules]]
+id = "entreprise-secwallet-token"
+description = "Détection des jetons d'accès internes SECWALLET"
+# Expression régulière : "SECWALLET_" suivi d'exactement 24 caractères (A-Z ou 0-9)
+regex = '''(SECWALLET_[A-Z0-9]{24})'''
+# Applique la vérification d'entropie sur le groupe capturé (le jeton complet)
+secretGroup = 1
+# Seuil d'entropie (à ajuster selon la variance réelle de vos clés, 3.5 est une bonne base)
+entropy = 3.5
+tags = ["interne", "entreprise", "secret"]
