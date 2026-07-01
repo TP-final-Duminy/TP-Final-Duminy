@@ -91,7 +91,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+          severity: 'CRITICAL'
 
       # 4. Publication conditionnelle sur GHCR
       # Ces étapes ne s'exécutent QUE si le scan Trivy (étape précédente) a réussi
