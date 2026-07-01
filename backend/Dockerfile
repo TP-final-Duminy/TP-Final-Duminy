@@ -1,5 +1,5 @@
 # --- Étape 1 : Préparation des dépendances ---
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 
 COPY package*.json ./
@@ -7,7 +7,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 # --- Étape 2 : Image de Production ---
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 # Définition de l'environnement
 ENV NODE_ENV=production
