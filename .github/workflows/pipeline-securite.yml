@@ -1,0 +1,45 @@
+name: Pipeline de Securite et de Deploiement
+
+# 1. Déclenchement explicite sur les deux branches pivots
+on:
+  push:
+    branches:
+      - staging
+      - main
+
+jobs:
+  # Job de validation obligatoire (s'exécute toujours pour staging et main)
+  validation:
+    name: Controle de Validation et Securite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v5
+
+      - name: Execution des tests et audits de code
+        run: |
+          echo "Exécution des tests unitaires..."
+          echo "Analyse statique de sécurité (SAST)..."
+          # Remplacer par vos vraies commandes (ex: npm test, pytest, etc.)
+
+  # Job de production hautement protégé
+  deploiement_production:
+    name: Deploiement en Production
+    runs-on: ubuntu-latest
+    
+    # 2. Matrice de dépendance stricte : ce job ne démarrera QUE si 'validation' réussit
+    needs: validation
+    
+    # 3. Bloc conditionnel de niveau job : restreint l'exécution à la branche main
+    if: github.ref == 'refs/heads/main'
+    
+    # 4. Liaison explicite à l'environnement GitHub protégé
+    environment: production
+
+    steps:
+      - name: Checkout du code pour déploiement
+        uses: actions/checkout@v5
+
+      - name: Executer le script de deploiement
+        run: |
+          echo "Déploiement de la version stable en production..."
