@@ -162,3 +162,42 @@ jobs:
           docker tag backend-local:${{ github.sha }} $IMAGE_ID:${{ github.sha }}
           docker push $IMAGE_ID:${{ github.sha }}
           echo "Image publiée avec succès : $IMAGE_ID:${{ github.sha }}"
+  
+  # -----------------------------------------------------------
+  # JOB 4 : Déploiement Continu (CD) du Frontend
+  # -----------------------------------------------------------
+  deploy-frontend:
+    name: Deploiement Frontend sur GitHub Pages
+    runs-on: ubuntu-latest
+    
+    # 1. Déclenchement strict : Uniquement sur la branche main
+    if: github.ref == 'refs/heads/main'
+    
+    # 2. Barrière de CI : S'exécute UNIQUEMENT si tous les jobs précédents sont validés
+    needs: [validation_et_tests, analyse_codeql, build_and_publish]
+    
+    # 3. Privilèges OIDC spécifiques pour le déploiement moderne
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      
+    # Recommandé par GitHub : Lier le job à l'environnement Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # 4. Packager le dossier frontend sous forme d'artefact éphémère
+      - name: Upload de l'artefact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './frontend' # Cible strictement le dossier frontend
+
+      # 5. Propulser le site en production via l'API OIDC
+      - name: Deploiement sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
