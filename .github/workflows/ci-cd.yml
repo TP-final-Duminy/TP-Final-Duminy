@@ -201,3 +201,60 @@ jobs:
       - name: Deploiement sur GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # -----------------------------------------------------------
+  # JOB 5 : Déploiement Continu (CD) du Backend sur Vercel
+  # -----------------------------------------------------------
+  deploy-backend:
+    name: Deploiement Backend sur Vercel (Secrets en RAM)
+    runs-on: ubuntu-latest
+    
+    # Déclenchement uniquement sur la branche main
+    if: github.ref == 'refs/heads/main'
+    
+    # Exige le succès absolu de la CI et de la livraison Docker
+    needs: [validation_et_tests, analyse_codeql, build_and_publish]
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 1. Installation de Vercel CLI
+      - name: Installation de Vercel CLI
+        run: npm install -g vercel
+
+      # 2. Installation de SOPS (pour le déchiffrement)
+      - name: Installation de SOPS
+        run: |
+          curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
+          sudo mv sops-v3.8.1.linux.amd64 /usr/local/bin/sops
+          sudo chmod +x /usr/local/bin/sops
+
+      # 3. Déchiffrement In-Memory et Déploiement
+      - name: Deploiement securise sur Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: |
+          echo "Déchiffrement des secrets en RAM via SOPS et yq..."
+          
+          # On déchiffre la sortie standard et on parse avec 'yq' directement dans une variable
+          # AUCUN fichier en clair n'est écrit sur le disque du runner
+          INTERNAL_TOKEN_DECRYPTED=$(sops -d .github/secrets-prod.yaml | yq -r .INTERNAL_TOKEN)
+          
+          echo "Déploiement du backend sur Vercel..."
+          
+          # La commande Vercel utilise le token d'API et injecte le secret déchiffré à la volée.
+          # Le flag --yes accepte toutes les configurations par défaut sans prompt interactif.
+          vercel deploy ./backend \
+            --prod \
+            --token ${{ secrets.VERCEL_TOKEN }} \
+            --yes \
+            --env INTERNAL_TOKEN=$INTERNAL_TOKEN_DECRYPTED
