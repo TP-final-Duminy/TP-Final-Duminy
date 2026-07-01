@@ -1,35 +1,21 @@
-# --- Étape 1 : Builder ---
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-COPY package*.json ./
-# Installation propre des dépendances (y compris devDependencies pour le build)
-RUN npm ci
-
-COPY . .
-# Compilation du code (ex: TypeScript vers JavaScript)
-RUN npm run build
-
-# --- Étape 2 : Production ---
-FROM node:20-alpine AS production
+FROM node:20-alpine
 
 # Définition de l'environnement de production
 ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Copie des dépendances de production uniquement
+# Copie et installation des dépendances strictes
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
-# Récupération de l'artefact compilé depuis l'étape builder
-COPY --from=builder /app/dist ./dist
+# Copie du reste du code source
+COPY . .
 
-# Sécurité : Création et utilisation d'un utilisateur non-root (intégré dans l'image Node)
+# Sécurité : utilisation d'un utilisateur non-root
 USER node
 
-# Exposition du port de l'API
 EXPOSE 3000
 
-# Démarrage de l'application
-CMD ["node", "dist/index.js"]
+# Démarrage de l'application (modifiez index.js si votre fichier principal s'appelle autrement)
+CMD ["node", "index.js"]
