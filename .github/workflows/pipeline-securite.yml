@@ -43,3 +43,77 @@ jobs:
       - name: Executer le script de deploiement
         run: |
           echo "Déploiement de la version stable en production..."
+
+  build_and_publish:
+    name: Build, Sec-Scan et Livraison GHCR
+    runs-on: ubuntu-latest
+    # Nécessaire pour s'authentifier et pousser sur GHCR
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v5
+
+      # 2. Optimisation : Filtrage des chemins
+      # Vérifie si le dossier backend/ a été modifié dans ce commit
+      - name: Detection des modifications backend
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+
+      # Configuration de Docker Buildx (Uniquement si backend modifié)
+      - name: Setup Docker Buildx
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # Build de l'image en LOCAL (load: true) pour pouvoir la scanner avant de la pousser
+      - name: Build de l'image locale
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          load: true 
+          tags: backend-local:${{ github.sha }}
+
+      # 3. Scan de sécurité de l'image (Trivy)
+      # Le pipeline s'arrêtera net (exit-code 1) si une faille HIGH ou CRITICAL est trouvée
+      - name: Scan de vulnerabilites Trivy
+        if: steps.filter.outputs.backend == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'backend-local:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # 4. Publication conditionnelle sur GHCR
+      # Ces étapes ne s'exécutent QUE si le scan Trivy (étape précédente) a réussi
+      - name: Authentification a GHCR
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN est généré automatiquement et temporairement par GitHub Actions
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push de l'image sur GHCR
+        if: steps.filter.outputs.backend == 'true'
+        run: |
+          # GHCR exige des noms de dépôts en minuscules
+          REPO=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_ID=ghcr.io/$REPO/backend-api
+          
+          # Tag de l'image scannée avec l'URL GHCR et le SHA du commit
+          docker tag backend-local:${{ github.sha }} $IMAGE_ID:${{ github.sha }}
+          
+          # Push vers le registre
+          docker push $IMAGE_ID:${{ github.sha }}
+          echo "Image publiée avec succès : $IMAGE_ID:${{ github.sha }}"
