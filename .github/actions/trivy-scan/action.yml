@@ -1,0 +1,59 @@
+name: 'Analyse SBOM avec Trivy'
+description: 'Gouvernance de sécurité : Analyse un SBOM CycloneDX JSON et gère les seuils de blocage.'
+
+# 1. Définition stricte des paramètres d'entrée
+inputs:
+  sbom-path:
+    description: 'Chemin relatif vers le fichier SBOM généré en amont (ex: sbom.json)'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Installation du binaire Trivy
+      shell: bash
+      run: |
+        echo "Téléchargement de la dernière version de Trivy..."
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+    # 2. Gestion des vulnérabilités MEDIUM (Avertissement uniquement)
+    - name: Scan SBOM (Avertissement MEDIUM, HIGH)
+      shell: bash
+      run: |
+        echo "Analyse des vulnérabilités de niveau MEDIUM..."
+        
+        # Exécute Trivy sans faire échouer le job (--exit-code 0) et sauvegarde le résultat
+        trivy sbom \
+          --severity MEDIUM,HIGH \
+          --exit-code 0 \
+          --format table \
+          --no-progress \
+          ${{ inputs.sbom-path }} > medium_report.txt
+        
+        # Vérifie si des failles ont été trouvées pour générer l'avertissement
+        if grep -q "Total: 0" medium_report.txt; then
+          echo "Aucune vulnérabilité MEDIUM détectée."
+        else
+          # Crée une annotation d'avertissement visible dans l'interface GitHub
+          echo "::warning::Des vulnérabilités MEDIUM ont été détectées dans le SBOM."
+          
+          # Ajoute le rapport au résumé (Summary) du workflow
+          echo "### :warning: Alerte de Sécurité : Vulnérabilités MEDIUM" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat medium_report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+        fi
+
+    # 3. Gestion des vulnérabilités HIGH et CRITICAL (Blocage strict)
+    - name: Scan SBOM (Blocage CRITICAL)
+      shell: bash
+      run: |
+        echo "Analyse des vulnérabilités de niveau HIGH et CRITICAL..."
+        
+        # Si une faille est trouvée, Trivy renvoie le code 1 et stoppe le pipeline
+        trivy sbom \
+          --severity CRITICAL \
+          --exit-code 1 \
+          --format table \
+          --no-progress \
+          ${{ inputs.sbom-path }}

@@ -125,16 +125,10 @@ jobs:
           load: true 
           tags: backend-local:${{ github.sha }}
 
-      - name: Scan de vulnerabilites Trivy
-        if: steps.filter.outputs.backend == 'true'
-        uses: aquasecurity/trivy-action@master
+      - name: Scan de securite du SBOM
+        uses: ./.github/actions/trivy-scan # Chemin relatif vers votre action composite
         with:
-          image-ref: 'backend-local:${{ github.sha }}'
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL'
+          sbom-path: 'backend/bom.json' # L'input que nous avons défini
 
       - name: Authentification a GHCR
         if: steps.filter.outputs.backend == 'true'
