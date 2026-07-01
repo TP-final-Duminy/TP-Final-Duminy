@@ -1,0 +1,150 @@
+name: Pipeline CI/CD Securise et Durci
+
+on:
+  push:
+    branches: [ "staging", "main" ]
+  pull_request:
+    branches: [ "staging" ]
+
+# 1. Principe du moindre privilège (GLOBAL)
+# Aucun job n'a le droit d'écriture par défaut.
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------
+  # JOB 1 : Validation des Secrets et Tests Applicatifs
+  # -----------------------------------------------------------
+  validation_et_tests:
+    name: Scans Gitleaks et Tests Unitaires
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Requis pour que Gitleaks scanne tous les commits poussés
+
+      # 4a. Politique d'interruption : Gitleaks en CI
+      # Pas de 'continue-on-error: true'. Si un secret est trouvé, le job s'arrête en erreur (exit code 1).
+      - name: Scan Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Optimisation avancée : Mise en cache Node.js
+      - name: Setup Node.js avec cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Installation des dépendances
+        working-directory: ./backend
+        run: npm ci
+
+      # 4b. Politique d'interruption : Testing
+      # Si les tests échouent, le pipeline s'arrête net.
+      - name: Execution des tests
+        working-directory: ./backend
+        run: npm test
+
+  # -----------------------------------------------------------
+  # JOB 2 : Analyse Statique de Sécurité (SAST) avec CodeQL
+  # -----------------------------------------------------------
+  analyse_codeql:
+    name: Scan de securite CodeQL
+    runs-on: ubuntu-latest
+    # Exception au moindre privilège : ce job a besoin d'écrire les alertes de sécurité (SARIF)
+    permissions:
+      contents: read
+      security-events: write 
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # 3. Intégration de CodeQL
+      - name: Initialisation de CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: 'javascript'
+          # Utilisation des requêtes étendues pour détecter plus de failles
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild CodeQL
+        uses: github/codeql-action/autobuild@v3
+
+      # 4c. Politique d'interruption : SAST
+      # Analyse le code et téléverse le rapport SARIF. Bloquera le PR sur erreur critique.
+      - name: Analyse CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+  # -----------------------------------------------------------
+  # JOB 3 : Build Docker et Livraison (La partie CD)
+  # -----------------------------------------------------------
+  build_and_publish:
+    name: Build, Sec-Scan et Livraison GHCR
+    runs-on: ubuntu-latest
+    
+    # Barrière absolue : ce job attend la réussite des précédents
+    needs: [validation_et_tests, analyse_codeql]
+    
+    permissions:
+      contents: read
+      packages: write
+      
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # --- L'ÉTAPE QUI MANQUAIT EST ICI (id: filter) ---
+      - name: Detection des modifications backend
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+
+      - name: Setup Docker Buildx
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build de l'image locale
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          load: true 
+          tags: backend-local:${{ github.sha }}
+
+      - name: Scan de vulnerabilites Trivy
+        if: steps.filter.outputs.backend == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'backend-local:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Authentification a GHCR
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push de l'image sur GHCR
+        if: steps.filter.outputs.backend == 'true'
+        run: |
+          REPO=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_ID=ghcr.io/$REPO/backend-api
+          docker tag backend-local:${{ github.sha }} $IMAGE_ID:${{ github.sha }}
+          docker push $IMAGE_ID:${{ github.sha }}
+          echo "Image publiée avec succès : $IMAGE_ID:${{ github.sha }}"
