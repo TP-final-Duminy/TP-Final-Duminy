@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "staging" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # 1. Principe du moindre privilège (GLOBAL)
 # Aucun job n'a le droit d'écriture par défaut.
 permissions:
@@ -235,8 +239,8 @@ jobs:
           sudo mv sops-v3.8.1.linux.amd64 /usr/local/bin/sops
           sudo chmod +x /usr/local/bin/sops
 
-      # 3. Déchiffrement In-Memory et Déploiement
-      - name: Deploiement securise sur Vercel
+      # 3. Déchiffrement In-Memory, Déploiement et Healthcheck
+      - name: Deploiement securise et Healthcheck
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -244,17 +248,31 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: |
           echo "Déchiffrement des secrets en RAM via SOPS et yq..."
-          
-          # On déchiffre la sortie standard et on parse avec 'yq' directement dans une variable
-          # AUCUN fichier en clair n'est écrit sur le disque du runner
           INTERNAL_TOKEN_DECRYPTED=$(sops -d .github/secrets-prod.yaml | yq -r .INTERNAL_TOKEN)
           
           echo "Déploiement du backend sur Vercel..."
           
-          # La commande Vercel utilise le token d'API et injecte le secret déchiffré à la volée.
-          # Le flag --yes accepte toutes les configurations par défaut sans prompt interactif.
-          vercel deploy ./backend \
+          # 1. On capture l'URL générée par Vercel dans une variable
+          PRODUCTION_URL=$(vercel deploy ./backend \
             --prod \
             --token ${{ secrets.VERCEL_TOKEN }} \
             --yes \
-            --env INTERNAL_TOKEN=$INTERNAL_TOKEN_DECRYPTED
+            --env INTERNAL_TOKEN=$INTERNAL_TOKEN_DECRYPTED)
+            
+          echo "Déploiement terminé sur : $PRODUCTION_URL"
+          
+          echo "Lancement du Healthcheck post-déploiement..."
+          
+          # 2. On exécute un test de diagnostic sur l'URL capturée
+          # -s : silencieux (ne pas afficher la barre de progression)
+          # -o /dev/null : ignorer le corps de la réponse JSON
+          # -w "%{http_code}" : n'afficher QUE le code de statut HTTP
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PRODUCTION_URL/api/health")
+          
+          # 3. Stratégie d'interruption (Rollback conceptuel)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::🚨 Échec du Healthcheck ! L'API a retourné le code HTTP $HTTP_STATUS."
+            exit 1
+          fi
+          
+          echo "✅ Succès ! Le Healthcheck a retourné le code 200 OK. L'application est saine en production."
