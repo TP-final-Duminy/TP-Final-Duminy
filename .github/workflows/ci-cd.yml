@@ -125,10 +125,26 @@ jobs:
           load: true 
           tags: backend-local:${{ github.sha }}
 
-      - name: Scan de securite du SBOM
-        uses: ./.github/actions/trivy-scan # Chemin relatif vers votre action composite
+      # --- 1. L'étape amont : Génération du SBOM ---
+      - name: Generation du SBOM (CycloneDX)
+        if: steps.filter.outputs.backend == 'true'
+        run: |
+          echo "Génération de la nomenclature SBOM de l'image Docker..."
+          # Utilisation de l'image Docker Trivy pour générer le SBOM sans rien installer sur le runner
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ${{ github.workspace }}/backend:/workspace \
+            aquasec/trivy image \
+            --format cyclonedx \
+            --output /workspace/bom.json \
+            backend-local:${{ github.sha }}
+
+      # --- 2. L'appel à votre nouvelle Action Composite ---
+      - name: Gouvernance de securite (Scan du SBOM)
+        if: steps.filter.outputs.backend == 'true'
+        uses: ./.github/actions/trivy-scan
         with:
-          sbom-path: 'backend/bom.json' # L'input que nous avons défini
+          sbom-path: 'backend/bom.json'
 
       - name: Authentification a GHCR
         if: steps.filter.outputs.backend == 'true'

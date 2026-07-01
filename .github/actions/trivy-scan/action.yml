@@ -20,7 +20,7 @@ runs:
     - name: Scan SBOM (Avertissement MEDIUM, HIGH)
       shell: bash
       run: |
-        echo "Analyse des vulnérabilités de niveau MEDIUM..."
+        echo "Analyse des vulnérabilités de niveau MEDIUM et High..."
         
         # Exécute Trivy sans faire échouer le job (--exit-code 0) et sauvegarde le résultat
         trivy sbom \
@@ -48,7 +48,7 @@ runs:
     - name: Scan SBOM (Blocage CRITICAL)
       shell: bash
       run: |
-        echo "Analyse des vulnérabilités de niveau HIGH et CRITICAL..."
+        echo "Analyse des vulnérabilités de niveau CRITICAL..."
         
         # Si une faille est trouvée, Trivy renvoie le code 1 et stoppe le pipeline
         trivy sbom \
