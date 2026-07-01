@@ -9,6 +9,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use(express.static(path.join(__dirname, '../public')));
+
 app.get('/api/health', (req, res) => {
   const isDatabaseConfigured = !!process.env.DATABASE_URL;
   const isJwtConfigured = !!process.env.JWT_SECRET;
@@ -43,7 +45,7 @@ app.get('/api/welcome', (req, res) => {
   res.send(`<h1>Bienvenue ${name}</h1>`);
 });
 
-if (process.env.NODE_ENV !== 'production' || process.env.DOCKER_RUN === 'true') {
+if (process.env.NODE_ENV !== 'test' && (process.env.NODE_ENV !== 'production' || process.env.DOCKER_RUN === 'true')) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Le serveur écoute activement sur le port ${PORT}`);
