@@ -27,9 +27,13 @@ jobs:
       # 4a. Politique d'interruption : Gitleaks en CI
       # Pas de 'continue-on-error: true'. Si un secret est trouvé, le job s'arrête en erreur (exit code 1).
       - name: Scan Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Téléchargement de Gitleaks..."
+          wget -qO- https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz | tar xz
+          
+          echo "Lancement du scan sur le dépôt..."
+          # La commande 'detect' scanne le code et retourne un code d'erreur 1 si un secret est trouvé
+          ./gitleaks detect --source . -v
 
       # 2. Optimisation avancée : Mise en cache Node.js
       - name: Setup Node.js avec cache
