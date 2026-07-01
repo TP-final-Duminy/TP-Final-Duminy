@@ -1,21 +1,29 @@
-FROM node:20-alpine3.19
-
-# Définition de l'environnement de production
-ENV NODE_ENV=production
-
+# --- Étape 1 : Préparation des dépendances ---
+FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Copie et installation des dépendances strictes
 COPY package*.json ./
+# Installation STRICTE des dépendances de production uniquement
 RUN npm ci --omit=dev
 
-# Copie du reste du code source
+# --- Étape 2 : Image de Production ---
+FROM node:20-alpine AS production
+
+# Définition de l'environnement
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Récupération exclusive des modules "propres" de l'étape précédente
+COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
+
+# Copie du code source applicatif
 COPY . .
 
-# Sécurité : utilisation d'un utilisateur non-root
+# Sécurité : Création et utilisation d'un utilisateur non-root
 USER node
 
 EXPOSE 3000
 
-# Démarrage de l'application (modifiez index.js si votre fichier principal s'appelle autrement)
+# Démarrage de l'application (Adaptez index.js si votre fichier s'appelle server.js ou app.js)
 CMD ["node", "index.js"]
