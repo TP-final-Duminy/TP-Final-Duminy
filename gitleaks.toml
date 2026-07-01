@@ -1,0 +1,9 @@
+title = "Configuration Gitleaks personnalisée"
+
+[[rules]]
+id = "secwallet-internal-token"
+description = "Intercepte les jetons d'accès internes de l'entreprise"
+# Regex : préfixe SECWALLET_ suivi d'exactement 24 caractères alphanumériques en majuscules
+regex = '''\bSECWALLET_[A-Z0-9]{24}\b'''
+# Vérification d'entropie pour éviter les faux positifs
+entropy = 3.5

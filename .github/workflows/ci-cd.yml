@@ -1,0 +1,203 @@
+name: Pipeline CI/CD Securise et Durci
+
+on:
+  push:
+    branches: [ "staging", "main" ]
+  pull_request:
+    branches: [ "staging" ]
+
+# 1. Principe du moindre privilège (GLOBAL)
+# Aucun job n'a le droit d'écriture par défaut.
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------
+  # JOB 1 : Validation des Secrets et Tests Applicatifs
+  # -----------------------------------------------------------
+  validation_et_tests:
+    name: Scans Gitleaks et Tests Unitaires
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Requis pour que Gitleaks scanne tous les commits poussés
+
+      # 4a. Politique d'interruption : Gitleaks en CI
+      # Pas de 'continue-on-error: true'. Si un secret est trouvé, le job s'arrête en erreur (exit code 1).
+      - name: Scan Gitleaks
+        run: |
+          echo "Téléchargement de Gitleaks..."
+          wget -qO- https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz | tar xz
+          
+          echo "Lancement du scan sur le dépôt..."
+          # La commande 'detect' scanne le code et retourne un code d'erreur 1 si un secret est trouvé
+          ./gitleaks detect --source . -v
+
+      # 2. Optimisation avancée : Mise en cache Node.js
+      - name: Setup Node.js avec cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'backend/package-lock.json'
+
+      - name: Installation des dépendances
+        working-directory: ./backend
+        run: npm ci
+
+      # 4b. Politique d'interruption : Testing
+      # Si les tests échouent, le pipeline s'arrête net.
+      - name: Execution des tests
+        working-directory: ./backend
+        run: npm test
+
+  # -----------------------------------------------------------
+  # JOB 2 : Analyse Statique de Sécurité (SAST) avec CodeQL
+  # -----------------------------------------------------------
+  analyse_codeql:
+    name: Scan de securite CodeQL
+    runs-on: ubuntu-latest
+    # Exception au moindre privilège : ce job a besoin d'écrire les alertes de sécurité (SARIF)
+    permissions:
+      contents: read
+      security-events: write 
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # 3. Intégration de CodeQL
+      - name: Initialisation de CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: 'javascript'
+          # Utilisation des requêtes étendues pour détecter plus de failles
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild CodeQL
+        uses: github/codeql-action/autobuild@v3
+
+      # 4c. Politique d'interruption : SAST
+      # Analyse le code et téléverse le rapport SARIF. Bloquera le PR sur erreur critique.
+      - name: Analyse CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+
+  # -----------------------------------------------------------
+  # JOB 3 : Build Docker et Livraison (La partie CD)
+  # -----------------------------------------------------------
+  build_and_publish:
+    name: Build, Sec-Scan et Livraison GHCR
+    runs-on: ubuntu-latest
+    
+    # Barrière absolue : ce job attend la réussite des précédents
+    needs: [validation_et_tests, analyse_codeql]
+    
+    permissions:
+      contents: read
+      packages: write
+      
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # --- L'ÉTAPE QUI MANQUAIT EST ICI (id: filter) ---
+      - name: Detection des modifications backend
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+
+      - name: Setup Docker Buildx
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build de l'image locale
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          load: true 
+          tags: backend-local:${{ github.sha }}
+
+      # --- 1. L'étape amont : Génération du SBOM ---
+      - name: Generation du SBOM (CycloneDX)
+        if: steps.filter.outputs.backend == 'true'
+        run: |
+          echo "Génération de la nomenclature SBOM de l'image Docker..."
+          # Utilisation de l'image Docker Trivy pour générer le SBOM sans rien installer sur le runner
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ${{ github.workspace }}/backend:/workspace \
+            aquasec/trivy image \
+            --format cyclonedx \
+            --output /workspace/bom.json \
+            backend-local:${{ github.sha }}
+
+      # --- 2. L'appel à votre nouvelle Action Composite ---
+      - name: Gouvernance de securite (Scan du SBOM)
+        if: steps.filter.outputs.backend == 'true'
+        uses: ./.github/actions/trivy-scan
+        with:
+          sbom-path: 'backend/bom.json'
+
+      - name: Authentification a GHCR
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push de l'image sur GHCR
+        if: steps.filter.outputs.backend == 'true'
+        run: |
+          REPO=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_ID=ghcr.io/$REPO/backend-api
+          docker tag backend-local:${{ github.sha }} $IMAGE_ID:${{ github.sha }}
+          docker push $IMAGE_ID:${{ github.sha }}
+          echo "Image publiée avec succès : $IMAGE_ID:${{ github.sha }}"
+  
+  # -----------------------------------------------------------
+  # JOB 4 : Déploiement Continu (CD) du Frontend
+  # -----------------------------------------------------------
+  deploy-frontend:
+    name: Deploiement Frontend sur GitHub Pages
+    runs-on: ubuntu-latest
+    
+    # 1. Déclenchement strict : Uniquement sur la branche main
+    if: github.ref == 'refs/heads/main'
+    
+    # 2. Barrière de CI : S'exécute UNIQUEMENT si tous les jobs précédents sont validés
+    needs: [validation_et_tests, analyse_codeql, build_and_publish]
+    
+    # 3. Privilèges OIDC spécifiques pour le déploiement moderne
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      
+    # Recommandé par GitHub : Lier le job à l'environnement Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # 4. Packager le dossier frontend sous forme d'artefact éphémère
+      - name: Upload de l'artefact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './frontend' # Cible strictement le dossier frontend
+
+      # 5. Propulser le site en production via l'API OIDC
+      - name: Deploiement sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
